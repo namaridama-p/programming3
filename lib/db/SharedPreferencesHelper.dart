@@ -1,14 +1,21 @@
+// ignore: file_names
+  import 'package:shared_preferences/shared_preferences.dart';
 
+class SharedPreferencesHelper {
+  static const String _keyCount = 'count';
 
-import 'package:shared_preferences/shared_preferences.dart';
-
-class SheredPreferencesHelper{
-  static const String _school_absence = "school_absence";
-
-  static Future<String> getschool_absence() async {
+  static Future<int> getCount() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_school_absence) ?? "{}";
+    return prefs.getInt(_keyCount) ?? 0;
   }
 
-  static
+  static Future<void> setCount(int count) async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_keyCount, count);
+  }
+
+  static Future<void> clearCount() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyCount);
+  }
 }
