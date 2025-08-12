@@ -3,69 +3,52 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../components/schedule_state.dart';
 
-class ProfileScreen extends StatefulWidget { // StatelessWidget から StatefulWidget に変更
+class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
 }
 
-class _ProfileScreenState extends State<ProfileScreen> { // Stateクラスを作成
-  // フォーム用のGlobalKey
+class _ProfileScreenState extends State<ProfileScreen> {
   final _formKey = GlobalKey<FormState>();
-
-  // TextEditingControllers
   final _lectureNameController = TextEditingController();
-  final _periodController = TextEditingController(); // 時限用
-  // カウント用のコントローラー (オプション)
-  // final _missCountController = TextEditingController(text: '0');
-  // final _delayCountController = TextEditingController(text: '0');
-  // final _officialMissCountController = TextEditingController(text: '0');
+  final _periodController = TextEditingController();
 
-
-  // 選択された曜日を保持する変数
-  String? _selectedDayKey; // 例: "monday", "tuesday"
+  String? _selectedDayKey;
   TimeOfDay? _selectedStartTime;
   TimeOfDay? _selectedEndTime;
-  final List<Map<String, String>> _days = [ // 曜日の選択肢
+
+  final List<Map<String, String>> _days = [
     {"value": "monday", "display": "月曜日"},
     {"value": "tuesday", "display": "火曜日"},
     {"value": "wednesday", "display": "水曜日"},
     {"value": "thursday", "display": "木曜日"},
     {"value": "friday", "display": "金曜日"},
-    // {"value": "saturday", "display": "土曜日"}, // 必要に応じて
-    // {"value": "sunday", "display": "日曜日"},   // 必要に応じて
   ];
 
   @override
   void dispose() {
-    // コントローラーを破棄
     _lectureNameController.dispose();
     _periodController.dispose();
-    // _missCountController.dispose();
-    // _delayCountController.dispose();
-    // _officialMissCountController.dispose();
     super.dispose();
   }
 
   void _clearForm() {
-    _formKey.currentState?.reset(); // フォームの状態をリセット
+    _formKey.currentState?.reset();
     _lectureNameController.clear();
     _periodController.clear();
-    // _missCountController.text = '0';
-    // _delayCountController.text = '0';
-    // _officialMissCountController.text = '0';
     setState(() {
-      _selectedDayKey = null; // 曜日の選択もリセット
-      _selectedEndTime = null;
+      _selectedDayKey = null;
       _selectedStartTime = null;
+      _selectedEndTime = null;
     });
   }
-  
-  String _formatTimeOfDay(TimeOfDay tod){
+
+  String _formatTimeOfDay(TimeOfDay tod) {
     final now = DateTime.now();
     final dt = DateTime(now.year, now.month, now.day, tod.hour, tod.minute);
-    return "${dt.hour.toString().padLeft(2,'0')}:${dt.minute.toString().padLeft(2, '0')}";
+    return "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
   }
 
   Future<void> _submitForm() async {
@@ -77,40 +60,95 @@ class _ProfileScreenState extends State<ProfileScreen> { // Stateクラスを作
         return;
       }
 
-      // ... (lectureName, periodKey の取得)
       final String lectureName = _lectureNameController.text;
       final String periodKey = _periodController.text;
+      final scheduleState = context.read<ScheduleState>();
 
       try {
-        await context.read<ScheduleState>().addOrUpdateLecture(
+        await scheduleState.addOrUpdateLecture(
           dayKey: _selectedDayKey!,
           periodKey: periodKey,
           lectureName: lectureName,
-          startTime: _formatTimeOfDay(_selectedStartTime!), // 時刻を文字列にして渡す
-          endTime: _formatTimeOfDay(_selectedEndTime!),     // 時刻を文字列にして渡す
+          startTime: _formatTimeOfDay(_selectedStartTime!),
+          endTime: _formatTimeOfDay(_selectedEndTime!),
         );
-        // ... (SnackBar表示とフォームクリア)
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('「$lectureName」を追加/更新しました。')),
+        );
+        _clearForm();
       } catch (e) {
-        // ... (エラー表示)
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('エラーが発生しました: $e')),
+        );
       }
     }
   }
 
+  // --- ここから追加 ---
+  /// 授業削除の確認ダイアログを表示するメソッド
+  void _showDeleteConfirmationDialog(BuildContext context, String dayKey, String periodKey, String lectureName) {
+    final scheduleState = context.read<ScheduleState>();
+
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('授業の削除'),
+          content: Text('「$lectureName」を本当に削除しますか？'),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('キャンセル'),
+              onPressed: () => Navigator.of(dialogContext).pop(),
+            ),
+            TextButton(
+              child: const Text('削除', style: TextStyle(color: Colors.redAccent)),
+              onPressed: () {
+                scheduleState.deleteLecture(dayKey, periodKey).then((_) {
+                  Navigator.of(dialogContext).pop();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('「$lectureName」を削除しました。')),
+                  );
+                }).catchError((error) {
+                  Navigator.of(dialogContext).pop();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('削除エラー: $error')),
+                  );
+                });
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+  // --- ここまで追加 ---
 
   @override
   Widget build(BuildContext context) {
+    // --- 授業一覧表示のために watch を使用 ---
+    final scheduleState = context.watch<ScheduleState>();
+    final schoolData = scheduleState.schoolData;
+
+    // 曜日を月->金でソートするためのキーリスト
+    final sortedDayKeys = schoolData.keys.toList()
+      ..sort((a, b) {
+        final dayOrder = {for (var i = 0; i < _days.length; i++) _days[i]['value']!: i};
+        return (dayOrder[a] ?? 99).compareTo(dayOrder[b] ?? 99);
+      });
+
     return Scaffold(
-      body: SingleChildScrollView( // 長くなる可能性があるので SingleChildScrollView でラップ
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
-            // --- データリセットセクション (前回実装) ---
+            // --- データリセットセクション (変更なし) ---
             const Text('データ管理', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
             const SizedBox(height: 10),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, padding: const EdgeInsets.symmetric(vertical: 12)),
-              onPressed: () { /* ... 確認ダイアログ表示とリセット処理 ... */
+              onPressed: () {
                 showDialog(
                   context: context,
                   builder: (BuildContext dialogContext) {
@@ -125,7 +163,7 @@ class _ProfileScreenState extends State<ProfileScreen> { // Stateクラスを作
                             context.read<ScheduleState>().resetSchoolData().then((_) {
                               Navigator.of(dialogContext).pop();
                               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('データがリセットされました。')));
-                            }).catchError((error){
+                            }).catchError((error) {
                               Navigator.of(dialogContext).pop();
                               ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('リセットエラー: $error')));
                             });
@@ -139,18 +177,17 @@ class _ProfileScreenState extends State<ProfileScreen> { // Stateクラスを作
               child: const Text('授業データをリセットする', style: TextStyle(fontSize: 16, color: Colors.white)),
             ),
             const SizedBox(height: 30),
-            const Divider(), // 区切り線
+            const Divider(),
             const SizedBox(height: 20),
 
-            // --- 授業追加フォームセクション ---
-            Text('授業の追加・編集', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+            // --- 授業追加フォームセクション (変更なし) ---
+            const Text('授業の追加・編集', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
             const SizedBox(height: 20),
             Form(
               key: _formKey,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  // 曜日選択
                   DropdownButtonFormField<String>(
                     decoration: const InputDecoration(labelText: '曜日', border: OutlineInputBorder()),
                     value: _selectedDayKey,
@@ -169,109 +206,63 @@ class _ProfileScreenState extends State<ProfileScreen> { // Stateクラスを作
                     validator: (value) => value == null ? '曜日を選択してください' : null,
                   ),
                   const SizedBox(height: 15),
-
-                  // 時限入力
                   TextFormField(
                     controller: _periodController,
                     decoration: const InputDecoration(labelText: '時限 (例: 1, 2)', border: OutlineInputBorder()),
                     keyboardType: TextInputType.number,
                     validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return '時限を入力してください';
-                      }
-                      if (int.tryParse(value) == null) {
-                        return '数値を入力してください';
-                      }
+                      if (value == null || value.isEmpty) return '時限を入力してください';
+                      if (int.tryParse(value) == null) return '数値を入力してください';
                       return null;
                     },
                   ),
                   const SizedBox(height: 15),
-
-
-
-                  // 授業名入力
                   TextFormField(
                     controller: _lectureNameController,
                     decoration: const InputDecoration(labelText: '授業名', border: OutlineInputBorder()),
                     validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return '授業名を入力してください';
-                      }
+                      if (value == null || value.isEmpty) return '授業名を入力してください';
                       return null;
                     },
                   ),
-                  TextFormField(
-                    controller: _lectureNameController,
-                    //...
-                  ),
-                  const SizedBox(height: 25),
-                  // TODO: オプションで欠席・遅刻等の初期値入力フィールドを追加する場合はここに
+                  const SizedBox(height: 15),
                   Row(
                     children: [
-                      // 開始時刻
                       Expanded(
                         child: InkWell(
                           onTap: () async {
-                            final TimeOfDay? picked = await showTimePicker(
-                              context: context,
-                              initialTime: _selectedStartTime ?? TimeOfDay.now(),
-                            );
-                            if (picked != null && picked != _selectedStartTime) {
-                              setState(() {
-                                _selectedStartTime = picked;
-                              });
-                            }
+                            final TimeOfDay? picked = await showTimePicker(context: context, initialTime: _selectedStartTime ?? TimeOfDay.now());
+                            if (picked != null) setState(() => _selectedStartTime = picked);
                           },
                           child: InputDecorator(
-                            decoration: const InputDecoration(
-                              labelText: '開始時刻',
-                              border: OutlineInputBorder(),
-                            ),
-                            child: Text(
-                              _selectedStartTime != null
-                                  ? _selectedStartTime!.format(context)
-                                  : '選択してください',
-                            ),
+                            decoration: const InputDecoration(labelText: '開始時刻', border: OutlineInputBorder()),
+                            child: Text(_selectedStartTime?.format(context) ?? '選択してください'),
                           ),
                         ),
                       ),
                       const SizedBox(width: 10),
-                      // 終了時刻
                       Expanded(
                         child: InkWell(
                           onTap: () async {
-                            final TimeOfDay? picked = await showTimePicker(
-                              context: context,
-                              initialTime: _selectedEndTime ?? TimeOfDay.now(),
-                            );
-                            if (picked != null && picked != _selectedEndTime) {
-                              setState(() {
-                                _selectedEndTime = picked;
-                              });
-                            }
+                            final TimeOfDay? picked = await showTimePicker(context: context, initialTime: _selectedEndTime ?? TimeOfDay.now());
+                            if (picked != null) setState(() => _selectedEndTime = picked);
                           },
                           child: InputDecorator(
-                            decoration: const InputDecoration(
-                              labelText: '終了時刻',
-                              border: OutlineInputBorder(),
-                            ),
-                            child: Text(
-                              _selectedEndTime != null
-                                  ? _selectedEndTime!.format(context)
-                                  : '選択してください',
-                            ),
+                            decoration: const InputDecoration(labelText: '終了時刻', border: OutlineInputBorder()),
+                            child: Text(_selectedEndTime?.format(context) ?? '選択してください'),
                           ),
                         ),
                       ),
                     ],
                   ),
+                  const SizedBox(height: 25),
                   ElevatedButton(
                     style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 15)),
                     onPressed: _submitForm,
                     child: const Text('授業を追加/更新する', style: TextStyle(fontSize: 16)),
                   ),
                   const SizedBox(height: 10),
-                  TextButton( // フォームクリアボタン
+                  TextButton(
                     onPressed: _clearForm,
                     child: const Text('フォームをクリア'),
                   ),
@@ -281,15 +272,57 @@ class _ProfileScreenState extends State<ProfileScreen> { // Stateクラスを作
             const SizedBox(height: 40),
             const Divider(),
             const SizedBox(height: 20),
-            // --- ここから授業一覧と削除機能の準備（次回） ---
-            Text('登録済みの授業', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+
+            // --- ここから授業一覧と削除機能（実装後） ---
+            const Text('登録済みの授業', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
             const SizedBox(height: 10),
-            Text(
-              '（ここに登録授業一覧と削除ボタンを実装予定です）',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey[600]),
-            ),
-            // --- ここまで授業一覧と削除機能の準備 ---
+
+            if (schoolData.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 20.0),
+                child: Text('登録されている授業はありません。', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey[600])),
+              )
+            else
+              ListView.builder(
+                physics: const NeverScrollableScrollPhysics(),
+                shrinkWrap: true,
+                itemCount: sortedDayKeys.length,
+                itemBuilder: (context, index) {
+                  final dayKey = sortedDayKeys[index];
+                  final daySchedule = schoolData[dayKey]!;
+                  final dayDisplay = _days.firstWhere((d) => d['value'] == dayKey, orElse: () => {'display': dayKey})['display']!;
+
+                  // 時限でソート
+                  final sortedPeriodKeys = daySchedule.keys.toList()..sort((a, b) => (int.tryParse(a) ?? 0).compareTo(int.tryParse(b) ?? 0));
+
+                  return Card(
+                    margin: const EdgeInsets.only(top: 8, bottom: 8),
+                    clipBehavior: Clip.antiAlias,
+                    child: ExpansionTile(
+                      title: Text(dayDisplay, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      children: sortedPeriodKeys.map((periodKey) {
+                        final lectureDetails = daySchedule[periodKey]!;
+                        final lectureName = lectureDetails['name'] as String? ?? '名称未定';
+                        final startTime = lectureDetails['startTime'] as String? ?? '--:--';
+                        final endTime = lectureDetails['endTime'] as String? ?? '--:--';
+
+                        return ListTile(
+                          title: Text('$periodKey時限: $lectureName'),
+                          subtitle: Text('時刻: $startTime - $endTime'),
+                          trailing: IconButton(
+                            icon: Icon(Icons.delete_outline, color: Colors.redAccent[400]),
+                            tooltip: '削除',
+                            onPressed: () {
+                              _showDeleteConfirmationDialog(context, dayKey, periodKey, lectureName);
+                            },
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  );
+                },
+              ),
+            // --- ここまで授業一覧と削除機能 ---
           ],
         ),
       ),

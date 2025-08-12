@@ -1,25 +1,25 @@
-// lib/states/schedule_state.dart
+// lib/components/schedule_state.dart
 import 'package:flutter/foundation.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart'; // 追加
 
 class ScheduleState with ChangeNotifier {
-  // ... (既存の _schoolDataKey, _schoolData, _isInitialized, isInitialized, schoolData ゲッター, コンストラクタ, _loadDataFromPrefs, _saveDataToPrefs, _getDefaultSchoolData は変更なし) ...
   static const String _schoolDataKey = 'school_data_key';
-
-
-
   Map<String, Map<String, Map<String, Object>>> _schoolData = {};
   bool _isInitialized = false;
-  bool get isInitialized => _isInitialized;
 
-  Map<String, Map<String, Map<String, Object>>> get schoolData {
-    if (!_isInitialized) {
-      print("Warning: schoolData accessed before initialization completed.");
-      return {};
-    }
-    return _schoolData;
-  }
+  // --- ここから追加 ---
+  // 今日の出欠を記録した授業のキー（例: "monday-1"）を保持するSet
+  Set<String> _todaysActions = {};
+
+  // 今日の日付を 'yyyy-MM-dd' 形式の文字列で取得するゲッター
+  String get _todayKey => DateFormat('yyyy-MM-dd').format(DateTime.now());
+  // --- ここまで追加 ---
+
+
+  bool get isInitialized => _isInitialized;
+  Map<String, Map<String, Map<String, Object>>> get schoolData => _schoolData;
 
   ScheduleState() {
     _loadDataFromPrefs();
@@ -45,74 +45,104 @@ class ScheduleState with ChangeNotifier {
           }
         });
         _schoolData = tempSchoolData;
-        print("Data loaded from SharedPreferences.");
       } catch (e) {
-        print("Error decoding school data from SharedPreferences: $e");
         _schoolData = _getDefaultSchoolData();
       }
     } else {
-      print("No data found in SharedPreferences, using default.");
       _schoolData = _getDefaultSchoolData();
     }
+
+    // --- ここから追加 ---
+    // 今日のアクションログをロード
+    final List<String>? savedActions = prefs.getStringList('actions_$_todayKey');
+    if (savedActions != null) {
+      _todaysActions = Set<String>.from(savedActions);
+    } else {
+      // 日付が変わっていた場合、古いキーのログは不要なのでクリアする
+      _todaysActions.clear();
+    }
+    // --- ここまで追加 ---
+
     _isInitialized = true;
     notifyListeners();
   }
 
   Future<void> _saveDataToPrefs() async {
-    if (!_isInitialized && _schoolData.isEmpty) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_schoolDataKey);
-      print("School data key removed from SharedPreferences (reset).");
-      return;
-    }
     if (!_isInitialized) return;
-
     final prefs = await SharedPreferences.getInstance();
-    try {
-      String jsonData = jsonEncode(_schoolData);
-      await prefs.setString(_schoolDataKey, jsonData);
-      print("Data saved to SharedPreferences.");
-    } catch (e) {
-      print("Error encoding school data to JSON: $e");
-    }
+    String jsonData = jsonEncode(_schoolData);
+    await prefs.setString(_schoolDataKey, jsonData);
   }
+
+  // --- ここから追加 ---
+  // 今日のアクションログをSharedPreferencesに保存するメソッド
+  Future<void> _saveTodaysActions() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('actions_$_todayKey', _todaysActions.toList());
+  }
+
+  // 指定された授業のボタンが今日すでに押されたかチェックするメソッド
+  bool hasActionBeenTakenToday(String day, String periodKey) {
+    return _todaysActions.contains('$day-$periodKey');
+  }
+  // --- ここまで追加 ---
 
   Map<String, Map<String, Map<String, Object>>> _getDefaultSchoolData() {
     return {
       "monday": {
-        "1": {"name": "情報工学実験3", "miss": 0, "Delay": 0, "official_miss": 0},
-        "2": {"name": "情報理論", "miss": 0, "Delay": 0, "official_miss": 0},
+        "1": {"name": "情報工学実験3", "miss": 0, "Delay": 0, "official_miss": 0, "startTime": "09:00", "endTime": "10:30"},
+        "2": {"name": "情報理論", "miss": 0, "Delay": 0, "official_miss": 0, "startTime": "10:40", "endTime": "12:10"},
       },
     };
   }
 
-  void incrementMiss(String day, String periodKey) {
+  // --- incrementMiss メソッドを修正 ---
+  Future<void> incrementMiss(String day, String periodKey) async {
     if (!_isInitialized) return;
+    final actionKey = '$day-$periodKey';
+    // すでにアクション済みなら何もしない
+    if (_todaysActions.contains(actionKey)) return;
+
     if (_schoolData.containsKey(day) && _schoolData[day]!.containsKey(periodKey)) {
       final currentMisses = _schoolData[day]![periodKey]!['miss'] as int? ?? 0;
       _schoolData[day]![periodKey]!['miss'] = currentMisses + 1;
+      _todaysActions.add(actionKey); // アクションを記録
+
+      await _saveDataToPrefs();
+      await _saveTodaysActions(); // アクションログも保存
       notifyListeners();
-      _saveDataToPrefs();
     }
   }
 
-  void incrementDelay(String day, String periodKey) {
+  // --- incrementDelay メソッドを修正 ---
+  Future<void> incrementDelay(String day, String periodKey) async {
     if (!_isInitialized) return;
+    final actionKey = '$day-$periodKey';
+    // すでにアクション済みなら何もしない
+    if (_todaysActions.contains(actionKey)) return;
+
     if (_schoolData.containsKey(day) && _schoolData[day]!.containsKey(periodKey)) {
       final currentDelays = _schoolData[day]![periodKey]!['Delay'] as int? ?? 0;
       _schoolData[day]![periodKey]!['Delay'] = currentDelays + 1;
+      _todaysActions.add(actionKey); // アクションを記録
+
+      await _saveDataToPrefs();
+      await _saveTodaysActions();
       notifyListeners();
-      _saveDataToPrefs();
     }
   }
 
+  // データリセット時にもアクションログをクリアするように修正
   Future<void> resetSchoolData() async {
     _schoolData = _getDefaultSchoolData();
+    _todaysActions.clear(); // アクションログもクリア
+
     notifyListeners();
     await _saveDataToPrefs();
-    print("School data has been reset to default.");
+    await _saveTodaysActions(); // クリアした状態を保存
   }
 
+  // 他のメソッド (addOrUpdateLecture, deleteLecture) は変更なし
   Future<void> addOrUpdateLecture({
     required String dayKey,
     required String periodKey,
@@ -123,10 +153,7 @@ class ScheduleState with ChangeNotifier {
     int initialDelay = 0,
     int initialOfficialMiss = 0,
   }) async {
-    if (!_isInitialized) {
-      print("Cannot add lecture: State not initialized.");
-      return;
-    }
+    if (!_isInitialized) return;
     if (!_schoolData.containsKey(dayKey)) {
       _schoolData[dayKey] = {};
     }
@@ -141,31 +168,17 @@ class ScheduleState with ChangeNotifier {
     _schoolData[dayKey]![periodKey] = lectureDetails;
     notifyListeners();
     await _saveDataToPrefs();
-    print("Lecture added/updated for $dayKey, period $periodKey: $lectureName");
   }
 
-  // --- ここから追加 ---
-  /// 指定された曜日の指定された時限の授業を削除します。
   Future<void> deleteLecture(String dayKey, String periodKey) async {
-    if (!_isInitialized) {
-      print("Cannot delete lecture: State not initialized.");
-      return;
-    }
-
+    if (!_isInitialized) return;
     if (_schoolData.containsKey(dayKey) && _schoolData[dayKey]!.containsKey(periodKey)) {
-      _schoolData[dayKey]!.remove(periodKey); // 指定された時限の授業を削除
-
-      // もしその曜日の授業がすべてなくなったら、曜日のエントリ自体を削除する (任意)
+      _schoolData[dayKey]!.remove(periodKey);
       if (_schoolData[dayKey]!.isEmpty) {
         _schoolData.remove(dayKey);
       }
-
-      notifyListeners(); // UIに変更を通知
-      await _saveDataToPrefs(); // 変更を SharedPreferences に保存
-      print("Lecture deleted for $dayKey, period $periodKey.");
-    } else {
-      print("Lecture not found for deletion: $dayKey, period $periodKey.");
+      notifyListeners();
+      await _saveDataToPrefs();
     }
   }
-// --- ここまで追加 ---
 }
